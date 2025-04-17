@@ -1,49 +1,60 @@
 // server.js
+// ────────────────────────────────────────────────────────────────────────────────
 const express = require("express");
 const cors    = require("cors");
 const dotenv  = require("dotenv");
 const multer  = require("multer");
+const fs      = require("fs");
+const path    = require("path");
 const { OpenAI } = require("openai");
 
-// Load environment variables
+// Load environment variables ----------------------------------------------------
 dotenv.config();
 
+// Express setup -----------------------------------------------------------------
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Multer setup for in‑memory file uploads
-const upload = multer();
-
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+// ─── Multer: disk storage in /tmp (Render’s temp fs) ────────────────────────────
+const upload = multer({
+  dest: "/tmp/uploads",                 // files written here automatically
+  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB max – adjust if you like
 });
 
-// Model from env (fallback if missing)
+// Make sure the folder exists (first cold start)
+fs.mkdirSync("/tmp/uploads", { recursive: true });
+
+// ─── OpenAI client --------------------------------------------------------------
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Model from env (fallback if missing) ------------------------------------------
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini-2025-04-14";
 
-// ─── Image Upload Route ────────────────────────────────────────────────────────
+// ─── Image Upload Route ---------------------------------------------------------
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    // Send the file buffer to OpenAI and get back an ID
+    // OpenAI accepts a stream. We point it to the file Multer just wrote.
+    const readStream = fs.createReadStream(req.file.path);
+
     const fileResp = await openai.files.create({
-      file: {
-        buffer: req.file.buffer,
-        filename: req.file.originalname
-      },
-      purpose: "vision"
+      file: readStream,
+      purpose: "vision",
+      filename: req.file.originalname
     });
 
-    return res.json({ file_id: fileResp.id });
+    res.json({ file_id: fileResp.id });
   } catch (err) {
     console.error("❌ Upload error:", err);
-    return res.status(500).json({ error: "Upload failed" });
+    res.status(500).json({ error: "Upload failed" });
+  } finally {
+    // Always remove the temp file
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
   }
 });
 // ────────────────────────────────────────────────────────────────────────────────
 
-// ─── Chat Route ─────────────────────────────────────────────────────────────────
+// ─── Chat Route ----------------------------------------------------------------
 app.post("/chat", async (req, res) => {
   console.log("--- REQUEST START ---");
   console.log("Incoming body:", req.body);
@@ -53,12 +64,12 @@ app.post("/chat", async (req, res) => {
     return res.status(400).json({ error: "Missing history array" });
   }
 
-  // Validate each message (text or image_file)
+  // Validate each message (text or image_file) ----------------------------------
   for (const [i, msg] of history.entries()) {
     const { role, content } = msg;
-    const validRole = ["system","user","assistant"].includes(role);
-    const isText = typeof content === "string";
-    const isImage =
+    const validRole = ["system", "user", "assistant"].includes(role);
+    const isText    = typeof content === "string";
+    const isImage   =
       content &&
       typeof content === "object" &&
       content.type === "image_file" &&
@@ -81,17 +92,17 @@ app.post("/chat", async (req, res) => {
     console.log("Reply:", reply);
     console.log("--- REQUEST END ---");
 
-    return res.json({ reply });
+    res.json({ reply });
   } catch (err) {
     console.error("❌ OpenAI error:", err);
     const status   = err.response?.status || 500;
     const errorMsg = err.response?.data?.error?.message || err.message;
-    return res.status(status).json({ error: errorMsg });
+    res.status(status).json({ error: errorMsg });
   }
 });
 // ────────────────────────────────────────────────────────────────────────────────
 
-// Start server
+// Start server ------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server listening on http://localhost:${PORT}`);
