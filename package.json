@@ -1,19 +1,27 @@
 {
   "name": "4.1-backend-api",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.1.0",
+  "description": "Backend for the multimodal chat widget",
+  "type": "module",
   "main": "server.js",
+
   "scripts": {
-    "start": "node --max-old-space-size=384 server.js"
+    "start": "node --max-old-space-size=1024 server.js",
+    "dev": "nodemon server.js"
   },
-  "keywords": [],
-  "author": "",
+
   "license": "ISC",
+  "keywords": [],
+
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "multer": "^1.4.5-lts.2",
     "openai": "^4.94.0"
+  },
+
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }
