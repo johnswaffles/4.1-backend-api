@@ -1,7 +1,7 @@
 {
   "name": "4.1-backend-api",
   "version": "1.1.0",
-  "description": "Image‑chat micro‑service built with Express, Multer, and the OpenAI Node SDK",
+  "description": "Backend API for Super Intelligent Assistant demo",
   "type": "module",
   "main": "server.js",
 
@@ -11,21 +11,18 @@
   },
 
   "engines": {
-    "node": ">=20"
+    "node": ">=22"          // Render’s default right now is v22.x
   },
 
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "multer": "^1.4.5",
-    "openai": "^4.28.0"
+    "multer": "^1.4.5-lts.2",          // <-- fixed
+    "openai": "^4.30.0"
   },
 
   "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-
-  "keywords": [],
-  "author": "John Shopinski",
-  "license": "MIT",
-  "private": true
+    "nodemon": "^2.0.23"
+  }
 }
