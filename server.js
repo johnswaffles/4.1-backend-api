@@ -1,71 +1,90 @@
-// server.js  ────────────────────────────────────────────────────────────
+// server.js  (ESM – package.json already has "type":"module")
 import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
 import multer from "multer";
-import fs from "fs";
-import path from "path";
 import { OpenAI } from "openai";
 
-const openai = new OpenAI({
-  // If you already set OPENAI_API_KEY in Render → Environment, you can omit this.
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const upload = multer({ dest: "uploads/" });       // disk storage
-
-const app = express();
+// ─── env & init ───────────────────────────────────────────────────────────────
+dotenv.config();
+const app     = express();
+const upload  = multer();                      // ─ in‑memory
+app.use(cors());
 app.use(express.json());
 
-// ── POST /chat  (multipart form:  prompt=<text>  image=<file>)
-app.post("/chat", upload.single("image"), async (req, res) => {
-  let visionFileId;
+const openai  = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const MODEL   = process.env.OPENAI_MODEL || "gpt-4o-mini";
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function bad(res, msg) {
+  return res.status(400).json({ error: msg });
+}
+function log(...args) { console.log("[api]", ...args); }
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ─── Upload Route ────────────────────────────────────────────────────────────
+app.post("/upload", upload.single("file"), async (req, res) => {
+  if (!req.file) return bad(res, "No file uploaded");
 
   try {
-    // 1) upload the image to OpenAI’s files endpoint
-    if (req.file) {
-      const fileResp = await openai.files.create({
-        file: fs.createReadStream(req.file.path),
-        purpose: "vision",
-      });
-      visionFileId = fileResp.id;
-    }
+    const file = {
+      data: req.file.buffer,          // <- SDK v4 format
+      name: req.file.originalname
+    };
 
-    // 2) build the user‑message content
-    const userContent = [];
-    if (visionFileId) {
-      userContent.push({
-        type: "image_url",
-        image_url: { url: `attach://${visionFileId}` },
-      });
-    }
-    if (req.body.prompt) {
-      userContent.push({ type: "text", text: req.body.prompt });
-    }
-
-    // 3) call chat completions
-    const chatResp = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: userContent },
-      ],
-      attachments: visionFileId ? [{ id: visionFileId }] : undefined,
+    const { id } = await openai.files.create({
+      file,
+      purpose: "vision"
     });
 
-    const answer = chatResp.choices[0].message.content;
-    res.json({ answer });
+    return res.json({ file_id: id });
   } catch (err) {
-    console.error("❌ OpenAI error:", err);
-    res.status(500).json({ error: err.message });
-  } finally {
-    // always delete the temp file
-    if (req.file) {
-      fs.unlink(req.file.path, () => {});
-    }
+    console.error("upload error:", err);
+    return res.status(err.status ?? 500).json({ error: err.message });
   }
 });
+// ──────────────────────────────────────────────────────────────────────────────
 
-// ── listen ─────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`✅ Server listening on http://localhost:${PORT}`)
-);
+
+// ─── Chat Route ───────────────────────────────────────────────────────────────
+app.post("/chat", async (req, res) => {
+  const { history } = req.body;
+  if (!Array.isArray(history) || !history.length)
+    return bad(res, "`history` must be a non‑empty array");
+
+  // validate messages
+  for (const [i, m] of history.entries()) {
+    if (!["user", "assistant", "system"].includes(m.role))
+      return bad(res, `msg ${i}: invalid role`);
+
+    const isText  = typeof m.content === "string";
+    const isImage =
+      m.content &&
+      typeof m.content === "object" &&
+      m.content.type === "image_file" &&
+      typeof m.content.file_id === "string";
+
+    if (!isText && !isImage)
+      return bad(res, `msg ${i}: invalid content format`);
+  }
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      messages: history
+    });
+    return res.json({ reply: completion.choices[0].message.content.trim() });
+  } catch (err) {
+    console.error("openai error:", err);
+    return res.status(err.status ?? 502).json({ error: err.message });
+  }
+});
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => log(`Listening on http://localhost:${PORT}`));
