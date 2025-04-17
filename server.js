@@ -1,86 +1,71 @@
-// ───────────────────────── server.js ─────────────────────────
+// server.js  ────────────────────────────────────────────────────────────
 import express from "express";
-import cors    from "cors";
-import dotenv  from "dotenv";
-import multer  from "multer";
+import multer from "multer";
+import fs from "fs";
+import path from "path";
 import { OpenAI } from "openai";
 
-dotenv.config();
+const openai = new OpenAI({
+  // If you already set OPENAI_API_KEY in Render → Environment, you can omit this.
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const upload = multer({ dest: "uploads/" });       // disk storage
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// ─── Multer: keep files on disk  (./uploads) ─────────────────
-const upload = multer({ dest: "uploads/" });
-
-// ─── OpenAI client ───────────────────────────────────────────
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL  = process.env.OPENAI_MODEL || "gpt-4o-mini-2025-04-16";
-
-// ─── Image Upload Route ──────────────────────────────────────
-app.post("/upload", upload.single("file"), async (req, res) => {
-  try {
-    const fileResp = await openai.files.create({
-      file:  req.file.path,              // disk path
-      purpose: "vision"
-    });
-    res.json({ file_id: fileResp.id });
-  } catch (err) {
-    console.error("❌ Upload error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── Chat Route ──────────────────────────────────────────────
-app.post("/chat", async (req, res) => {
-  const { history } = req.body;
-  if (!Array.isArray(history) || history.length === 0) {
-    return res.status(400).json({ error: "Missing history array" });
-  }
-
-  // basic validation (unchanged) -----------------------------
-  for (const [i, msg] of history.entries()) {
-    const { role, content } = msg;
-    const goodRole = ["system", "user", "assistant"].includes(role);
-    const isText   = typeof content === "string";
-    const isImage  =
-      content && typeof content === "object" &&
-      content.type === "image_file" &&
-      typeof content.file_id === "string";
-
-    if (!goodRole || !(isText || isImage)) {
-      return res.status(400).json({ error: `Invalid message at index ${i}` });
-    }
-  }
-
-  // NEW: normalise single‑object image messages --------------
-  const messages = history.map(m => {
-    if (
-      typeof m.content === "object" &&
-      m.content.type === "image_file"
-    ) {
-      return { ...m, content: [m.content] };   // wrap in array
-    }
-    return m;                                   // leave text untouched
-  });
+// ── POST /chat  (multipart form:  prompt=<text>  image=<file>)
+app.post("/chat", upload.single("image"), async (req, res) => {
+  let visionFileId;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: MODEL,
-      messages
+    // 1) upload the image to OpenAI’s files endpoint
+    if (req.file) {
+      const fileResp = await openai.files.create({
+        file: fs.createReadStream(req.file.path),
+        purpose: "vision",
+      });
+      visionFileId = fileResp.id;
+    }
+
+    // 2) build the user‑message content
+    const userContent = [];
+    if (visionFileId) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: `attach://${visionFileId}` },
+      });
+    }
+    if (req.body.prompt) {
+      userContent.push({ type: "text", text: req.body.prompt });
+    }
+
+    // 3) call chat completions
+    const chatResp = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: userContent },
+      ],
+      attachments: visionFileId ? [{ id: visionFileId }] : undefined,
     });
-    res.json({ reply: completion.choices[0].message.content.trim() });
+
+    const answer = chatResp.choices[0].message.content;
+    res.json({ answer });
   } catch (err) {
     console.error("❌ OpenAI error:", err);
-    const status = err.status || 500;
-    res.status(status).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  } finally {
+    // always delete the temp file
+    if (req.file) {
+      fs.unlink(req.file.path, () => {});
+    }
   }
 });
 
-// ─── Start server ────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+// ── listen ─────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
   console.log(`✅ Server listening on http://localhost:${PORT}`)
 );
-// ─────────────────────────────────────────────────────────────

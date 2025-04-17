@@ -1,15 +1,31 @@
 {
   "name": "4.1-backend-api",
   "version": "1.1.0",
+  "description": "Image‑chat micro‑service built with Express, Multer, and the OpenAI Node SDK",
   "type": "module",
+  "main": "server.js",
+
   "scripts": {
-    "start": "node --max-old-space-size=1024 server.js"
+    "start": "node --max-old-space-size=1024 server.js",
+    "dev": "nodemon server.js"
   },
+
+  "engines": {
+    "node": ">=20"
+  },
+
   "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
-    "express": "^5.1.0",
-    "multer": "^1.4.5-lts.2",
-    "openai": "^4.94.0"
-  }
+    "express": "^4.19.2",
+    "multer": "^1.4.5",
+    "openai": "^4.28.0"
+  },
+
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+
+  "keywords": [],
+  "author": "John Shopinski",
+  "license": "MIT",
+  "private": true
 }
