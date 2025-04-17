@@ -1,54 +1,61 @@
+// ────────────────────────────────────────────────────
+// server.js  ―  disk‑based uploads + OpenAI v4 SDK
+// ────────────────────────────────────────────────────
 import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import multer from "multer";
-import fs from "node:fs/promises";
-import path from "node:path";
+import cors    from "cors";
+import dotenv  from "dotenv";
+import multer  from "multer";
+import fs      from "node:fs/promises";
+import path    from "node:path";
+import { fileURLToPath } from "node:url";
 import { OpenAI } from "openai";
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+// Load .env ──────────────────────────────────────────
 dotenv.config();
+
+// Express setup ──────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini-2025-04-14";
-
-// ─── Multer: DISK storage (tmp dir) instead of memory ─────────────────────────
-const uploadDir = "/tmp/uploads";               // Render’s /tmp is fast & empty
-await fs.mkdir(uploadDir, { recursive: true });
-
+// Multer *disk* storage (files are placed in /tmp) ───
 const upload = multer({
-  dest: uploadDir,
-  limits: { fileSize: 15 * 1024 * 1024 }        // 15 MB max
+  dest: "/tmp",               // Render’s ephemeral disk
+  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB max
 });
 
-// ─── Image Upload Route ───────────────────────────────────────────────────────
+// OpenAI client ──────────────────────────────────────
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Fallback model name if env var missing──────────────
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+// ─── Image Upload Route ─────────────────────────────
 app.post("/upload", upload.single("file"), async (req, res) => {
-  const tmpPath = req.file.path;                // where Multer stored it
   try {
-    const fileResp = await openai.files.create({
-      file: {
-        // create a readable stream instead of loading into memory
-        stream: await fs.open(tmpPath, "r").then(fh => fh.createReadStream()),
-        filename: req.file.originalname
-      },
+    // ➊ Create a readable stream from the temp file
+    const fileStream = await fs.open(req.file.path, "r").then(f => f.createReadStream());
+
+    // ➋ Send to OpenAI – v4 SDK expects *just* the stream
+    const uploadResp = await openai.files.create({
+      file: fileStream,                 // <‑‑ no nested object
       purpose: "vision"
     });
 
-    res.json({ file_id: fileResp.id });
+    // ➌ Clean up temp file
+    await fs.unlink(req.file.path).catch(() => {});
+
+    return res.json({ file_id: uploadResp.id });
   } catch (err) {
     console.error("❌ Upload error:", err);
-    res.status(500).json({ error: "Upload failed" });
-  } finally {
-    // Clean up no‑matter‑what
-    fs.unlink(tmpPath).catch(() => {});
+    return res.status(500).json({ error: err.message });
   }
 });
-// ──────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────
 
-// ─── Chat Route ───────────────────────────────────────────────────────────────
+// ─── Chat Route (unchanged) ─────────────────────────
 app.post("/chat", async (req, res) => {
   console.log("--- REQUEST START ---");
   console.log("Incoming body:", req.body);
@@ -58,18 +65,16 @@ app.post("/chat", async (req, res) => {
     return res.status(400).json({ error: "Missing history array" });
   }
 
-  // validate messages
+  // minimal validation (text | image_file) … unchanged
   for (const [i, msg] of history.entries()) {
     const { role, content } = msg;
-    const validRole = ["system", "user", "assistant"].includes(role);
+    const roleOk = ["system", "user", "assistant"].includes(role);
     const isText = typeof content === "string";
     const isImage =
-      content &&
-      typeof content === "object" &&
-      content.type === "image_file" &&
-      typeof content.file_id === "string";
+      content && typeof content === "object" &&
+      content.type === "image_file" && typeof content.file_id === "string";
 
-    if (!validRole || !(isText || isImage)) {
+    if (!roleOk || !(isText || isImage)) {
       console.error(`❌ Bad message at index ${i}:`, msg);
       return res.status(400).json({ error: `Invalid message at index ${i}` });
     }
@@ -86,16 +91,17 @@ app.post("/chat", async (req, res) => {
     console.log("Reply:", reply);
     console.log("--- REQUEST END ---");
 
-    res.json({ reply });
+    return res.json({ reply });
   } catch (err) {
     console.error("❌ OpenAI error:", err);
     const status   = err.response?.status || 500;
-    const errorMsg = err.response?.data?.error?.message || err.message;
-    res.status(status).json({ error: errorMsg });
+    const message  = err.response?.data?.error?.message || err.message;
+    return res.status(status).json({ error: message });
   }
 });
-// ──────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────
 
+// Start server ───────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server listening on http://localhost:${PORT}`);
