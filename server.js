@@ -16,7 +16,8 @@ app.post("/chat", async (req, res) => {
   try {
     const { history } = req.body;
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      // Use a supported chat model
+      model: "gpt-4o",
       messages: history,
     });
     res.json({ reply: completion.choices[0].message.content });
@@ -30,7 +31,8 @@ app.get("/speech", async (req, res) => {
   try {
     const q = req.query.q?.toString() || "";
     const mp3 = await openai.audio.speech.create({
-      model: "gpt-4o-mini-tts",
+      // tts-1 is the standard text-to-speech model
+      model: "tts-1",
       voice: "coral",
       input: q.slice(0, 4000),
     });
